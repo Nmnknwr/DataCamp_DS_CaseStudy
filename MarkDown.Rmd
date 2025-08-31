@@ -1,0 +1,210 @@
+# DataCamp Certification Case Study
+
+### Project Brief
+
+You are on the data science team for a coffee company that is looking to expand their business into Ukraine. They want to get an understanding of the existing coffee shop market there.
+
+You have a dataset from Google businesses. It contains information about coffee shops in Ukraine. The marketing manager wants to identify the key coffee shop segments. They will use this to construct their marketing plan. In their current location, they split the market into 5 segments. The marketing manager wants to know how many segments are in this new market, and their key features.
+
+You will be presenting your findings to the Marketing Manager, who has no data science background.
+
+The data you will use for this analysis can be accessed here: `"data/coffee_shops.csv"`
+
+```{r message = FALSE}
+# Loading Libraries
+
+library(readr)
+library(tidyverse)
+library(skimr)
+library(data.table)
+
+library(ggplot2)
+library(zoo)
+
+## install.packages("clustMixType")
+
+library(clustMixType)
+```
+
+
+```{r message = FALSE}
+# Importing data table
+
+coffee_shops <- fread("/Users/namankanwar/Case Studys/DataCamp_DS_CaseStudy/Data/coffee_shops.csv")
+```
+
+# Initial EDA
+
+```{r message = FALSE}
+skim(coffee_shops)
+```
+
+Lets start with **Place type** -
+
+```{r message = FALSE}
+table(coffee_shops$`Place type`)
+```
+
+**Place type** has many entries that can be clubbed together as "Coffee shop" type. We also see some entries here that are not a coffee shop or coffee related (Eg: "Restaurant","E-commerce service" etc). We will drop these rows. Now the column **Place type** has only 1 unique value, all rows being "Coffee shops", and thus the feature can be dropped.
+
+```{r, message=FALSE}
+coffee_shops <- coffee_shops[.(`Place type`=c("Cafe","Coffee roasters","Coffee shop","Coffee store","Espresso bar","Coffee stand","Store"),to="Coffee shop"),on="Place type",`Place type`:=i.to]
+
+coffee_shops <- coffee_shops %>%
+  filter(`Place type`=="Coffee shop") %>% 
+  select(-c(`Place type`))
+```
+
+Next, lets look at **Dine in option** -
+
+```{r, message=FALSE}
+table(coffee_shops$`Dine in option`)
+```
+
+We know that the rows where **Dine in option** is not "TRUE" means that the option is not available, thus can be replaced with "FALSE". We will also convert this into a factor type.
+
+```{r, message=FALSE}
+coffee_shops$`Dine in option` <- replace_na(coffee_shops$`Dine in option`,FALSE)
+
+coffee_shops$`Dine in option` <- as.factor(coffee_shops$`Dine in option`)
+```
+
+
+Next, lets look at **Takeout option** -
+
+```{r, message=FALSE}
+table(coffee_shops$`Takeout option`)
+```
+
+We know that the rows where **Takeout option** is not "TRUE" means that the option is not available, thus can be replaced with "FALSE". We will also convert this into a factor type.
+
+```{r, message=FALSE}
+coffee_shops$`Takeout option` <- replace_na(coffee_shops$`Takeout option`,FALSE)
+coffee_shops$`Takeout option` <- as.factor(coffee_shops$`Takeout option`)
+```
+
+Next, lets look at **Delivery option** -
+
+```{r, message=FALSE}
+table(coffee_shops$`Delivery option`)
+```
+
+Missing values here can be assumed as "FALSE"
+
+```{r, message=FALSE}
+coffee_shops$`Delivery option` <- replace_na(coffee_shops$`Delivery option`,FALSE)
+coffee_shops$`Delivery option` <- as.factor(coffee_shops$`Delivery option`)
+```
+
+Next, lets convert **Region** to factor type as well.
+
+```{r, message=FALSE}
+coffee_shops$Region <- as.factor(coffee_shops$Region)
+```
+
+Coming to **Price** - 
+
+```{r, message=FALSE}
+table(coffee_shops$Price)
+```
+
+We have 74 entries where Price is blank. We cannot drop these rows as it is quite a good number of them. Lets impute the missing values by replacing them with the most frequent (mode) of the column.
+
+```{r, message=FALSE}
+coffee_shops$Price[coffee_shops$Price==''] <- NA # Replacing blanks with NA's
+
+coffee_shops %>% 
+  ggplot(aes(Price)) +
+  geom_bar() # We can see the most frequent value is "$$"
+
+coffee_shops$Price <- replace_na(coffee_shops$Price,"$$") # Replacing NA's with $$
+
+coffee_shops$Price <- ordered(coffee_shops$Price,levels=c("$","$$","$$$"))
+```
+
+Lastly, the **Rating** and **Reviews** columns -
+
+We have 2 rows where **Reviews** and **Rating** are missing. We will impute this with the mean Rating and Reviews of that Region.
+
+```{r, message=FALSE}
+cols <- c("Rating","Reviews")
+
+coffee_shops <- coffee_shops[, (cols) := lapply(.SD, function(x) nafill(x, type = "const", fill = mean(x, na.rm = TRUE)))
+    , by = Region
+    , .SDcols = cols]
+```
+
+*Note* - The **Rating** metric is an average of all **Reviews**, so just looking at either of them individually doesn't make sense (Eg: A coffee shop with Rating of 5 but with only a single Review, compared to a coffee shop with Rating of 4.5 but with thousands of Reviews). We need a metric where the rating is weighted by the number of reviews. Lets call is "Points", where Points = Reviews multiplied by Rating. Higher the value of "Points" the better.
+
+```{r, message=FALSE}
+coffee_shops$Points <- as.numeric(coffee_shops$Rating*coffee_shops$Reviews)
+```
+
+Now lets look at our dataset once more -
+
+```{r, message=FALSE}
+skim(coffee_shops)
+```
+
+No missing values, all columns set to appropriate data type - looks good!
+
+## Clustering the Data into Segments
+
+In our dataset we have categorical as well as numerical features. In order to do clustering with both categorical as well as numerical features, we will use the **kproto()** algorithm which is part of the **clustMixType** package.
+
+```{r,message=FALSE,warning=FALSE,results='hide'}
+for_clustering <- coffee_shops %>% 
+  select(-c("Rating","Reviews","Region","Place name","Price"))
+
+for_clustering$Points <- scale(for_clustering$Points)
+
+wss <- numeric(10) 
+set.seed(26)
+for(i in 1:10){
+  kpres <-kproto(for_clustering, k = i, nstart = 25) 
+  wss[i] <-kpres$tot.withinss 
+  } 
+
+```
+
+```{r}
+plot(1:10, wss, type = "b", ylab = "Objective Function", xlab = "# Clusters", main = "Scree Plot")
+
+```
+
+
+
+As we can see from the graph, the optimal number of clusters/segments can be set at 5.
+
+```{r,message=FALSE,warning=FALSE,results='hide'}
+set.seed(26)
+
+clusters <- kproto(coffee_shops,k=5,nstart=25)
+
+coffee_shops$cluster <- clusters$cluster
+```
+
+Lets evaluate the resulting clusters. Lets take a look at the Average number of reviews, average rating, and number of shops that have delivery, dine in, take away options in each cluster.
+
+```{r,message=FALSE}
+(coffee_shops %>% 
+  group_by(cluster) %>% 
+  summarise(Count = n(),
+            Avg_Rating = mean(Rating),
+            Avg_Reviews = mean(Reviews),
+            Delivery_pct = round(sum(`Delivery option`=="TRUE")/n()*100),
+            Takeout_pct = round(sum(`Takeout option`=="TRUE")/n()*100),
+            Dine_in_pct = round(sum(`Dine in option`=="TRUE")/n()*100)))
+```
+
+From the above, we can see the following segments -
+
+* **Cluster 1** - Has 43 shops in it. The shops have an average rating of 4.75 and on average 183 reviews. None have Takeout and only 23% have dine in. Only 14% of them offer delivery
+* **Cluster 2** - Has 38 shops, Rated at 4.58 on average with 1555 reviews. All of them have dine in, and 85% of them have takeout option. Only 32% deliver.
+* **Cluster 3** - Has 24 Shops, Avg Rating of 4.71 with 76 reviews. Almost all of them have takeout, but only 4% have delivery or dine in
+* **Cluster 4** - Has 86 shops with an average rating of 4.63 with 362 reviews. Almost all of them have Takeout as well as Dine in. But only 14% have delivery.
+* **Cluster 5** - Singular shop. Has highest "Points" - very popular shop with huge number of reviews. Offers all services.
+
+
+
+
